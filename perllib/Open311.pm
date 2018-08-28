@@ -33,6 +33,7 @@ has use_extended_updates => ( is => 'ro', isa => Bool, default => 0 );
 has extended_statuses => ( is => 'ro', isa => Bool, default => 0 );
 has always_send_email => ( is => 'ro', isa => Bool, default => 0 );
 has multi_photos => ( is => 'ro', isa => Bool, default => 0 );
+has use_customer_reference => ( is => 'ro', isa => Bool, default => 0 );
 
 before [
     qw/get_service_list get_service_meta_info get_service_requests get_service_request_updates
@@ -199,9 +200,7 @@ sub _generate_service_request_description {
         $description .= "detail: " . $problem->detail . "\n\n";
         $description .= "url: " . $extra->{url} . "\n\n";
         $description .= "Submitted via FixMyStreet\n";
-        if ($self->extended_description ne 'oxfordshire') {
-            $description = "title: " . $problem->title . "\n\n$description";
-        }
+        $description = "title: " . $problem->title . "\n\n$description";
     } elsif ($problem->cobrand eq 'fixamingata') {
         $description .= "Titel: " . $problem->title . "\n\n";
         $description .= "Beskrivning: " . $problem->detail . "\n\n";
@@ -370,9 +369,13 @@ sub _populate_service_request_update_params {
         }
     }
 
+    my $service_request_id = $comment->problem->external_id;
+    if ( $self->use_customer_reference ) {
+        $service_request_id = $comment->problem->get_extra_metadata('customer_reference');
+    }
     my $params = {
         updated_datetime => DateTime::Format::W3CDTF->format_datetime($comment->confirmed->set_nanosecond(0)),
-        service_request_id => $comment->problem->external_id,
+        service_request_id => $service_request_id,
         status => $status,
         description => $comment->text,
         last_name => $lastname,
