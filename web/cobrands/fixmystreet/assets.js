@@ -19,10 +19,15 @@ var fixmystreet = fixmystreet || {};
 OpenLayers.Layer.VectorAsset = OpenLayers.Class(OpenLayers.Layer.Vector, {
     initialize: function(name, options) {
         OpenLayers.Layer.Vector.prototype.initialize.apply(this, arguments);
-        // Do in both locations so fixmystreet.bodies is up to date. Otherwise
-        // e.g. a layer can disappear the category change after it should.
-        $(fixmystreet).on('report_new:category_change:extras_received', this.update_layer_visibility.bind(this));
+        // Update layer based upon new data from category change
         $(fixmystreet).on('report_new:category_change', this.update_layer_visibility.bind(this));
+    },
+
+    relevant: function() {
+      var category = $('select#form_category').val(),
+          layer = this.fixmystreet;
+      return OpenLayers.Util.indexOf(layer.asset_category, category) != -1 &&
+        ( !layer.body || OpenLayers.Util.indexOf(fixmystreet.bodies, layer.body) != -1 );
     },
 
     update_layer_visibility: function() {
@@ -32,8 +37,7 @@ OpenLayers.Layer.VectorAsset = OpenLayers.Class(OpenLayers.Layer.Vector, {
 
         if (!this.fixmystreet.always_visible) {
             // Show/hide the asset layer when the category is chosen
-            var category = $('#problem_form select#form_category').val();
-            if (fixmystreet.assets.check_layer_relevant(this.fixmystreet, category)) {
+            if (this.relevant()) {
                 this.setVisibility(true);
                 if (this.fixmystreet.fault_layer) {
                     this.fixmystreet.fault_layer.setVisibility(true);
@@ -52,11 +56,39 @@ OpenLayers.Layer.VectorAsset = OpenLayers.Class(OpenLayers.Layer.Vector, {
         }
     },
 
+    select_nearest_asset: function() {
+        // The user's green marker might be on the map the first time we show the
+        // assets, so snap it to the closest asset marker if so.
+        if (!fixmystreet.markers.getVisibility() || !(this.getVisibility() && this.inRange)) {
+            return;
+        }
+        var threshold = 50; // metres
+        var marker = fixmystreet.markers.features[0];
+        if (marker === undefined) {
+            // No marker to be found so bail out
+            return;
+        }
+        var nearest_feature = this.getNearestFeature(marker.geometry, threshold);
+        if (nearest_feature) {
+            this.get_select_control().select(nearest_feature);
+        }
+    },
+
+    get_select_control: function() {
+        var controls = fixmystreet.map.getControlsByClass('OpenLayers.Control.SelectFeature');
+        for (var i=0; i<controls.length; i++) {
+            var control = controls[i];
+            if (control.layer == this && !control.hover) {
+                return control;
+            }
+        }
+    },
+
     zoom_to_assets: function() {
         // This function is called when the asset category is
         // selected, and will zoom the map in to the first level that
         // makes the asset layer visible if it's not already shown.
-        if (!this.inRange) {
+        if (!this.inRange && this.resolutions) {
             var firstVisibleResolution = this.resolutions[0];
             var zoomLevel = fixmystreet.map.getZoomForResolution(firstVisibleResolution);
             fixmystreet.map.zoomTo(zoomLevel);
@@ -74,9 +106,7 @@ OpenLayers.Layer.VectorNearest = OpenLayers.Class(OpenLayers.Layer.VectorAsset, 
         OpenLayers.Layer.VectorAsset.prototype.initialize.apply(this, arguments);
         $(fixmystreet).on('maps:update_pin', this.checkFeature.bind(this));
         $(fixmystreet).on('assets:selected', this.checkFeature.bind(this));
-        // Might only be able to fill in fields once they've been returned from the server
-        $(fixmystreet).on('report_new:category_change:extras_received', this.changeCategory.bind(this));
-        // But also want to do it immediately in case it's hiding the form or something
+        // Update fields/etc from data now available from category change
         $(fixmystreet).on('report_new:category_change', this.changeCategory.bind(this));
     },
 
@@ -87,7 +117,7 @@ OpenLayers.Layer.VectorNearest = OpenLayers.Class(OpenLayers.Layer.VectorAsset, 
         this.getNearest(lonlat);
         this.updateUSRNField();
         if (this.fixmystreet.road) {
-            var valid_category = this.fixmystreet.all_categories || (this.fixmystreet.asset_category && fixmystreet.assets.check_layer_relevant( this.fixmystreet, $('select#form_category').val() ) );
+            var valid_category = this.fixmystreet.all_categories || (this.fixmystreet.asset_category && this.relevant());
             if (!valid_category || !this.selected_feature) {
                 this.road_not_found();
             } else {
@@ -219,7 +249,7 @@ function asset_selected(e) {
             { size: new OpenLayers.Size(0, 0), offset: new OpenLayers.Pixel(0, 0) },
             true, close_fault_popup);
         fixmystreet.map.addPopup(fault_popup);
-        get_select_control(this).unselect(e.feature);
+        this.get_select_control().unselect(e.feature);
         return;
     }
 
@@ -301,11 +331,11 @@ function check_zoom_message_visibility() {
     if (this.fixmystreet.non_interactive) {
         return;
     }
-    var category = $("#problem_form select#form_category").val(),
+    var category = $("select#form_category").val(),
         prefix = category.replace(/[^a-z]/gi, ''),
         id = "category_meta_message_" + prefix,
         $p = $('#' + id);
-    if (fixmystreet.assets.check_layer_relevant(this.fixmystreet, category)) {
+    if (this.relevant()) {
         if ($p.length === 0) {
             $p = $("<p>").prop("id", id).prop('class', 'category_meta_message');
             $p.insertAfter('#form_category_row');
@@ -324,14 +354,21 @@ function check_zoom_message_visibility() {
     } else {
         $.each(this.fixmystreet.asset_category, function(i, c) {
             var prefix = c.replace(/[^a-z]/gi, ''),
-            id = "category_meta_message_" + prefix,
-            $p = $('#' + id);
+                id = "category_meta_message_" + prefix,
+                $p = $('#' + id);
             $p.remove();
         });
     }
 }
 
 function layer_visibilitychanged() {
+    if (this.fixmystreet.road) {
+        if (!this.getVisibility()) {
+            this.road_not_found();
+        }
+        return;
+    }
+
     check_zoom_message_visibility.call(this);
     var layers = fixmystreet.map.getLayersBy('assets', true);
     var visible = 0;
@@ -347,46 +384,18 @@ function layer_visibilitychanged() {
         fixmystreet.markers.setVisibility(true);
     }
     if (!this.fixmystreet.non_interactive) {
-        select_nearest_asset.call(this);
+        this.select_nearest_asset();
     }
 }
 
-
-function get_select_control(layer) {
-    var controls = fixmystreet.map.getControlsByClass('OpenLayers.Control.SelectFeature');
-    for (var i=0; i<controls.length; i++) {
-        var control = controls[i];
-        if (control.layer == layer && !control.hover) {
-            return control;
-        }
-    }
-}
-
-function select_nearest_asset() {
-    // The user's green marker might be on the map the first time we show the
-    // assets, so snap it to the closest asset marker if so.
-    if (!fixmystreet.markers.getVisibility() || !(this.getVisibility() && this.inRange)) {
-        return;
-    }
-    var threshold = 50; // metres
-    var marker = fixmystreet.markers.features[0];
-    if (marker === undefined) {
-        // No marker to be found so bail out
-        return;
-    }
-    var nearest_feature = this.getNearestFeature(marker.geometry, threshold);
-    if (nearest_feature) {
-        get_select_control(this).select(nearest_feature);
-    }
-}
 
 function layer_loadend() {
-    select_nearest_asset.call(this);
+    this.select_nearest_asset();
     // Preserve the selected marker when panning/zooming, if it's still on the map
     if (selected_feature !== null && !(selected_feature in this.selectedFeatures)) {
         var replacement_feature = find_matching_feature(selected_feature, this, this.fixmystreet.asset_id_field);
         if (!!replacement_feature) {
-            get_select_control(this).select(replacement_feature);
+            this.get_select_control().select(replacement_feature);
         }
     }
 }
@@ -519,6 +528,8 @@ fixmystreet.assets = {
             layer_options.projection = new OpenLayers.Projection(fixmystreet.wmts_config.map_projection);
         }
         if (options.filter_key) {
+            // Add this filter to the layer, so it can potentially be used
+            // in the request (though only Bristol currently does this).
             if (OpenLayers.Util.isArray(options.filter_value)) {
                 layer_options.filter = new OpenLayers.Filter.FeatureId({
                     type: OpenLayers.Filter.Function,
@@ -537,12 +548,14 @@ fixmystreet.assets = {
                     property: options.filter_key,
                     value: options.filter_value
                 });
-                layer_options.strategies.push(new OpenLayers.Strategy.Filter({filter: layer_options.filter}));
             }
+            // Add a strategy filter to the layer, to filter the incoming results
+            // after they are received. Bristol does not need this, but has to ask
+            // for the filter data in its response so it doesn't then disappear.
             layer_options.strategies.push(new OpenLayers.Strategy.Filter({filter: layer_options.filter}));
         }
 
-        var layer_class = OpenLayers.Layer.VectorAsset;
+        var layer_class = options.class || OpenLayers.Layer.VectorAsset;
         if (options.usrn || options.road) {
             layer_class = OpenLayers.Layer.VectorNearest;
         }
@@ -624,7 +637,8 @@ fixmystreet.assets = {
                 }
             });
         }
-        if (!options.always_visible) {
+
+        if (!options.always_visible || options.road) {
             asset_layer.events.register( 'visibilitychanged', asset_layer, layer_visibilitychanged);
         }
 
@@ -674,11 +688,6 @@ fixmystreet.assets = {
             fixmystreet.map.addControl(fixmystreet.assets.controls[i]);
             fixmystreet.assets.controls[i].activate();
         }
-    },
-
-    check_layer_relevant: function(layer, category) {
-      return OpenLayers.Util.indexOf(layer.asset_category, category) != -1 &&
-        ( !layer.body || OpenLayers.Util.indexOf(fixmystreet.bodies, layer.body) != -1 );
     }
 };
 
@@ -804,22 +813,25 @@ return {
 })();
 
 $(fixmystreet).on('body_overrides:change', function() {
-    var councils_text = $('#js-councils_text').html();
+    var single_body_only = $('#single_body_only').val(),
+        do_not_send = $('#do_not_send').val(),
+        bodies = fixmystreet.bodies;
 
-    var single_body_only = $('#single_body_only').val();
     if (single_body_only) {
-        councils_text = councils_text.replace(/<strong>.*<\/strong>/, '<strong>' + single_body_only + '</strong>');
+        bodies = [ single_body_only ];
     }
 
-    var do_not_send = $('#do_not_send').val();
     if (do_not_send) {
         do_not_send = fixmystreet.utils.csv_to_array(do_not_send);
-        for (var i=0; i<do_not_send.length; i++) {
-            // XXX Translations
-            councils_text = councils_text.replace(new RegExp('or <strong>' + do_not_send[i] + '</strong>'), '');
-            councils_text = councils_text.replace(new RegExp('<strong>' + do_not_send[i] + '</strong> or '), '');
-        }
+        var lookup = {};
+        $.map(do_not_send, function(val) {
+            lookup[val] = 1;
+        });
+        bodies = OpenLayers.Array.filter(bodies, function(b) {
+            return !lookup[b];
+        });
     }
 
-    $('#js-councils_text').html(councils_text);
+    fixmystreet.update_public_councils_text(
+        $('#js-councils_text').html(), bodies);
 });

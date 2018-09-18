@@ -176,8 +176,8 @@ sub phone_display {
 
 sub latest_anonymity {
     my $self = shift;
-    my $p = $self->problems->search(undef, { order_by => { -desc => 'id' } } )->first;
-    my $c = $self->comments->search(undef, { order_by => { -desc => 'id' } } )->first;
+    my $p = $self->problems->search(undef, { rows => 1, order_by => { -desc => 'id' } } )->first;
+    my $c = $self->comments->search(undef, { rows => 1, order_by => { -desc => 'id' } } )->first;
     my $p_created = $p ? $p->created->epoch : 0;
     my $c_created = $c ? $c->created->epoch : 0;
     my $obj = $p_created >= $c_created ? $p : $c;
@@ -330,6 +330,37 @@ sub split_name {
     return { first => $first || '', last => $last || '' };
 }
 
+sub can_moderate {
+    my ($self, $object, $perms) = @_;
+
+    my ($type, $ids);
+    if ($object->isa("FixMyStreet::DB::Result::Comment")) {
+        $type = 'update';
+        $ids = $object->problem->bodies_str_ids;
+    } else {
+        $type = 'problem';
+        $ids = $object->bodies_str_ids;
+    }
+
+    my $staff_perm = exists($perms->{staff}) ? $perms->{staff} : $self->has_permission_to(moderate => $ids);
+    return 1 if $staff_perm;
+
+    # See if the cobrand wants to allow it in some circumstance
+    my $cobrand = $self->result_source->schema->cobrand;
+    return $cobrand->call_hook('moderate_permission', $self, $type => $object);
+}
+
+sub can_moderate_title {
+    my ($self, $problem, $perm) = @_;
+
+    # Must have main permission, this is to potentially restrict only
+    return 0 unless $perm;
+
+    # If hook returns anything use it, otherwise default to yes
+    my $cobrand = $self->result_source->schema->cobrand;
+    return $cobrand->call_hook('moderate_permission_title', $self, $problem) // 1;
+}
+
 has body_permissions => (
     is => 'ro',
     lazy => 1,
@@ -340,12 +371,15 @@ has body_permissions => (
 );
 
 sub permissions {
-    my ($self, $c, $body_id) = @_;
+    my ($self, $problem) = @_;
+    my $cobrand = $self->result_source->schema->cobrand;
 
     if ($self->is_superuser) {
-        my $perms = $c->cobrand->available_permissions;
+        my $perms = $cobrand->available_permissions;
         return { map { %$_ } values %$perms };
     }
+
+    my $body_id = $problem->bodies_str;
 
     return unless $self->belongs_to_body($body_id);
 

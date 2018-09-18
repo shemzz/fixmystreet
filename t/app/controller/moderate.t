@@ -4,6 +4,12 @@ use parent 'FixMyStreet::Cobrand::Default';
 
 sub send_moderation_notifications { 0 }
 
+package FixMyStreet::Cobrand::TestTitle;
+
+use parent 'FixMyStreet::Cobrand::Default';
+
+sub moderate_permission_title { 0 }
+
 package main;
 
 use FixMyStreet::TestMech;
@@ -86,7 +92,7 @@ subtest 'Auth' => sub {
 
 my %problem_prepopulated = (
     problem_show_name => 1,
-    problem_show_photo => 1,
+    problem_photo => 1,
     problem_title => 'Good bad good',
     problem_detail => 'Good bad bad bad good bad',
 );
@@ -146,7 +152,7 @@ subtest 'Problem moderation' => sub {
 
         $mech->submit_form_ok({ with_fields => {
             %problem_prepopulated,
-            problem_show_photo => 0,
+            problem_photo => 0,
         }});
         $mech->base_like( qr{\Q$REPORT_URL\E} );
 
@@ -154,7 +160,7 @@ subtest 'Problem moderation' => sub {
 
         $mech->submit_form_ok({ with_fields => {
             %problem_prepopulated,
-            problem_show_photo => 1,
+            problem_photo => 1,
         }});
         $mech->base_like( qr{\Q$REPORT_URL\E} );
 
@@ -208,6 +214,25 @@ subtest 'Problem moderation' => sub {
             $report->update({ state => 'confirmed' });
         }
     };
+
+    subtest 'Try and moderate title when not allowed' => sub {
+        FixMyStreet::override_config {
+            ALLOWED_COBRANDS => 'testtitle'
+        }, sub {
+            $mech->get_ok($REPORT_URL);
+            $mech->submit_form_ok({ with_fields => {
+                problem_show_name => 1,
+                problem_photo => 1,
+                problem_detail => 'Changed detail',
+            }});
+            $mech->base_like( qr{\Q$REPORT_URL\E} );
+            $mech->content_like(qr/Moderated by Bromley Council/);
+
+            $report->discard_changes;
+            is $report->title, 'Good bad good';
+            is $report->detail, 'Changed detail';
+        }
+    };
 };
 
 $mech->content_lacks('Posted anonymously', 'sanity check');
@@ -251,8 +276,8 @@ sub create_update {
 }
 my %update_prepopulated = (
     update_show_name => 1,
-    update_show_photo => 1,
-    update_detail => 'update good good bad good',
+    update_photo => 1,
+    update_text => 'update good good bad good',
 );
 
 my $update = create_update();
@@ -263,7 +288,7 @@ subtest 'updates' => sub {
         $mech->get_ok($REPORT_URL);
         $mech->submit_form_ok({ with_fields => {
             %update_prepopulated,
-            update_detail => 'update good good good',
+            update_text => 'update good good good',
         }}) or die $mech->content;
         $mech->base_like( qr{\Q$REPORT_URL\E} );
 
@@ -274,7 +299,7 @@ subtest 'updates' => sub {
     subtest 'Revert text' => sub {
         $mech->submit_form_ok({ with_fields => {
             %update_prepopulated,
-            update_revert_detail  => 1,
+            update_revert_text => 1,
         }});
         $mech->base_like( qr{\Q$REPORT_URL\E} );
 
@@ -314,7 +339,7 @@ subtest 'updates' => sub {
 
         $mech->submit_form_ok({ with_fields => {
             %update_prepopulated,
-            update_show_photo => 0,
+            update_photo => 0,
         }});
         $mech->base_like( qr{\Q$REPORT_URL\E} );
 
@@ -322,7 +347,7 @@ subtest 'updates' => sub {
 
         $mech->submit_form_ok({ with_fields => {
             %update_prepopulated,
-            update_show_photo => 1,
+            update_photo => 1,
         }});
         $mech->base_like( qr{\Q$REPORT_URL\E} );
 
@@ -348,7 +373,7 @@ subtest 'Update 2' => sub {
     $mech->get_ok($REPORT_URL);
     $mech->submit_form_ok({ with_fields => {
         %update_prepopulated,
-        update_detail => 'update good good good',
+        update_text => 'update good good good',
     }}) or die $mech->content;
 
     $update2->discard_changes;

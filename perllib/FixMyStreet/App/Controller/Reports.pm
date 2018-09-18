@@ -31,26 +31,7 @@ Show the summary page of all reports.
 sub index : Path : Args(0) {
     my ( $self, $c ) = @_;
 
-    # Zurich goes straight to map page, with all reports
-    if ( $c->cobrand->moniker eq 'zurich' ) {
-        $c->stash->{page} = 'reports';
-        $c->forward( 'stash_report_filter_status' );
-        $c->forward( 'load_and_group_problems' );
-        $c->stash->{body} = { id => 0 }; # So template can fetch the list
-
-        if ($c->get_param('ajax')) {
-            $c->detach('ajax', [ 'reports/_problem-list.html' ]);
-        }
-
-        my $pins = $c->stash->{pins};
-        FixMyStreet::Map::display_map(
-            $c,
-            latitude  => @$pins ? $pins->[0]{latitude} : 0,
-            longitude => @$pins ? $pins->[0]{longitude} : 0,
-            area      => 274456,
-            pins      => $pins,
-            any_zoom  => 1,
-        );
+    if ( $c->cobrand->call_hook('report_page_data') ) {
         return 1;
     }
 
@@ -59,14 +40,7 @@ sub index : Path : Args(0) {
         $c->detach( 'redirect_body' );
     }
 
-    if (my $body = $c->get_param('body')) {
-        $body = $c->model('DB::Body')->find( { id => $body } );
-        if ($body) {
-            $body = $c->cobrand->short_name($body);
-            $c->res->redirect("/reports/$body");
-            $c->detach;
-        }
-    }
+    $c->forward('display_body_stats');
 
     my $dashboard = $c->forward('load_dashboard_data');
 
@@ -99,6 +73,24 @@ sub index : Path : Args(0) {
 
     # Down here so that error pages aren't cached.
     $c->response->header('Cache-Control' => 'max-age=3600');
+}
+
+=head2 display_body_stats
+
+Show the stats for a body if body param is set.
+
+=cut
+
+sub display_body_stats : Private {
+    my ( $self, $c ) = @_;
+    if (my $body = $c->get_param('body')) {
+        $body = $c->model('DB::Body')->find( { id => $body } );
+        if ($body) {
+            $body = $c->cobrand->short_name($body);
+            $c->res->redirect("/reports/$body");
+            $c->detach;
+        }
+    }
 }
 
 =head2 body
